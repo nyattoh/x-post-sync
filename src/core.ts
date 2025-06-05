@@ -1,77 +1,150 @@
 import type { RequestUrlParam } from "obsidian";
 
-/* ---------- 型 ---------- */
 export interface Tweet {
-    id: string;
-    text: string;
-    created_at: string;
-    referenced_tweets?: { id: string; type: string }[];
+  id: string;
+  text: string;
+  created_at: string;
+  referenced_tweets?: { id: string; type: string }[];
 }
 
-/* ---------- ユーザ ID 取得 (CORS 無し) ---------- */
 export async function fetchUserId(
-    username: string,
-    requestUrl: (p: RequestUrlParam) => Promise<any>
+  username: string,
+  requestUrl: (p: RequestUrlParam) => Promise<any>,
+  bearer?: string
 ): Promise<string> {
-    const url =
-        "https://cdn.syndication.twimg.com/widgets/followbutton/info.json" +
-        `?screen_names=${encodeURIComponent(username)}`;
-    console.log("fetchUserId: Requesting URL:", url);
-    const res = await requestUrl({ url });
-    console.log("fetchUserId: Full response object:", res);
-    console.log("fetchUserId: res.json type:", typeof res.json);
-    console.log("fetchUserId: res.json content:", res.json);
-
-    if (typeof res.json === 'string') {
-        console.log("fetchUserId: res.json is a string. Attempting to parse if not empty.");
-        if (res.json.trim() === "") {
-            console.error("fetchUserId: res.json is an empty string. Cannot parse.");
-            throw new Error("User ID not found - empty response from API");
+  // Try Twitter API v2 users/by/username endpoint first if bearer token available
+  if (bearer) {
+    const apiUrl = `https://api.twitter.com/2/users/by/username/${encodeURIComponent(username)}`;
+    
+    try {
+      console.log("Attempting Twitter API v2 for user:", username);
+      const res = await requestUrl({ 
+        url: apiUrl,
+        headers: { 
+          Authorization: `Bearer ${bearer}` 
         }
-        try {
-            const parsedJson = JSON.parse(res.json);
-            console.log("fetchUserId: Parsed res.json (if it was a string):", parsedJson);
-            const id = parsedJson[0]?.id;
-            if (!id) throw new Error("User ID not found in parsed JSON");
-            return id;
-        } catch (e: any) {
-            console.error("fetchUserId: Error parsing res.json string:", e.message);
-            throw new Error("User ID not found - failed to parse API response string: " + e.message);
+      });
+      
+      console.log("Twitter API v2 response:", res);
+      
+      let jsonData;
+      try {
+        jsonData = res.json;
+      } catch (jsonError) {
+        if (res.text && res.text.trim()) {
+          jsonData = JSON.parse(res.text);
+        } else {
+          throw new Error("Empty response from Twitter API");
         }
-    } else if (typeof res.json === 'object' && res.json !== null) {
-        const id = res.json[0]?.id;
-        if (!id) throw new Error("User ID not found in response object");
-        return id;
-    } else {
-        console.error("fetchUserId: res.json is not a string or a valid object. Content:", res.json);
-        throw new Error("User ID not found - unexpected API response format");
+      }
+      
+      if (jsonData?.data?.id) {
+        console.log("Found user ID via API v2:", jsonData.data.id);
+        return String(jsonData.data.id);
+      }
+      
+      if (jsonData?.errors) {
+        console.log("API v2 errors:", jsonData.errors);
+      }
+      
+    } catch (apiError: any) {
+      console.log("Twitter API v2 failed, trying syndication endpoint:", apiError.message);
     }
+  }
+  
+  // Fallback to syndication API (no auth required)
+  const syndicationUrl = "https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=" + encodeURIComponent(username);
+  
+  try {
+    console.log("Trying syndication API for user:", username);
+    const res = await requestUrl({ url: syndicationUrl });
+    console.log("Syndication API response:", res);
+    
+    let jsonData;
+    try {
+      jsonData = res.json;
+    } catch (jsonError) {
+      if (res.text && res.text.trim()) {
+        jsonData = JSON.parse(res.text);
+      } else {
+        throw new Error("Empty response from syndication API");
+      }
+    }
+    
+    if (!jsonData) {
+      throw new Error("No JSON data in syndication response");
+    }
+    
+    const data = Array.isArray(jsonData) ? jsonData : [jsonData];
+    const id = data[0]?.id;
+    
+    if (!id) {
+      throw new Error(`User ID not found for username: ${username}. Please ensure the username is correct and the account is public.`);
+    }
+    
+    console.log("Found user ID via syndication:", id);
+    return String(id);
+    
+  } catch (syndicationError: any) {
+    console.error("Syndication API failed:", syndicationError);
+    throw new Error(`Failed to fetch user ID for ${username}. Please check the username and try again.`);
+  }
 }
 
-/* ---------- ポスト取得 ---------- */
 export async function fetchTweets(
-    userId: string,
-    bearer: string,
-    requestUrl: (p: RequestUrlParam) => Promise<any>
+  userId: string,
+  bearer: string,
+  requestUrl: (p: RequestUrlParam) => Promise<any>
 ): Promise<Tweet[]> {
-    const url =
-        `https://api.twitter.com/2/users/${userId}/tweets` +
-        `?max_results=100&exclude=replies` +
-        `&tweet.fields=created_at,referenced_tweets`;
-    const res = await requestUrl({ url, headers: { Authorization: `Bearer ${bearer}` } });
-    return res.json.data ?? [];
+  const url = `https://api.twitter.com/2/users/${userId}/tweets?max_results=100&exclude=replies&tweet.fields=created_at,referenced_tweets`;
+  try {
+    const res = await requestUrl({
+      url,
+      headers: { Authorization: `Bearer ${bearer}` }
+    });
+    
+    console.log("fetchTweets raw response:", res);
+    console.log("fetchTweets response status:", res.status);
+    console.log("fetchTweets response text:", res.text);
+    
+    let jsonData;
+    try {
+      jsonData = res.json;
+    } catch (jsonError) {
+      if (res.text && res.text.trim()) {
+        jsonData = JSON.parse(res.text);
+      } else {
+        throw new Error("Empty response from tweets API");
+      }
+    }
+    
+    console.log("fetchTweets parsed json:", jsonData);
+    
+    if (!jsonData) {
+      throw new Error("No JSON data in tweets response");
+    }
+    
+    if (jsonData.errors) {
+      const errorMsg = jsonData.errors.map((e: any) => e.message).join(", ");
+      throw new Error(`API Error: ${errorMsg}`);
+    }
+    
+    return jsonData.data ?? [];
+  } catch (error: any) {
+    console.error("fetchTweets error:", error);
+    throw new Error(`Failed to fetch tweets: ${error.message}`);
+  }
 }
 
-/* ---------- Markdown 変換 ---------- */
 export function tweetToMarkdown(t: Tweet): string {
-    const rt = t.referenced_tweets?.find(r => r.type === "retweeted")?.id ?? "";
-    return [
-        "---",
-        `id: ${t.id}`,
-        `created_at: ${t.created_at}`,
-        rt ? `retweeted_id: ${rt}` : "",
-        "---",
-        t.text,
-        ""
-    ].join("\n");
+  const rt = t.referenced_tweets?.find(r => r.type === "retweeted")?.id ?? "";
+  return [
+    "---",
+    `id: ${t.id}`,
+    `created_at: ${t.created_at}`,
+    rt ? `retweeted_id: ${rt}` : "",
+    "---",
+    t.text,
+    ""
+  ].join("\n");
 }

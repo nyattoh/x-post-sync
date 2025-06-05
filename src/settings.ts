@@ -1,13 +1,13 @@
 export interface XSyncSettings {
-    bearerToken: string;    // App-only Bearer Token
-    username: string;   // @ を除くハンドル
-    cachedUserId: string;   // 取得済み ID
-    interval: number;   // 自動同期間隔（分）
+  bearerToken: string;
+  username: string;
+  cachedUserId: string;
+  interval: number;
 }
 
 export const DEFAULT_SETTINGS: XSyncSettings = {
-    bearerToken: "",
-    username: "",
-    cachedUserId: "",
-    interval: 60
+  bearerToken: "",
+  username: "",
+  cachedUserId: "",
+  interval: 60
 };

@@ -1,0 +1,288 @@
+meta:
+  title: "X Posts Sync (TDD Driven Implementation Plan)"
+  version: "0.2.0"
+  author: "ビスさん"
+  created: "2025-06-05"
+  license: "MIT"
+  description: >
+    Sync your own X (Twitter) posts & retweets into an Obsidian vault.
+    Free-tier API only（App-only Bearer Token）。  
+    全依存を最小化し、脆弱性ゼロでビルド可能。  
+    本書は **テスト駆動開発 (TDD)** で実装するための設計 & 手順書。
+
+# --------------------------------------------------------------------
+context:
+  env:
+    node: ">=18 (tested on 22.11.0)"
+    obsidian: "デスクトップ 1.8.x"
+    vault_path: "D:/Dropbox/obsidian/YourVault"
+  api_constraints:
+    - "Free plan: 100 posts / 月"
+    - "Endpoint: /2/users/:id/tweets (App-only OK)"
+  plugin_goals:
+    - "ハンドル名から自分の投稿+RT を取得"
+    - "Markdown に変換し YYYY/MM/DD フォルダへ保存"
+    - "UI は設定タブ + リボン + ステータスバー"
+  non_goals:
+    - "Bookmarks (要 Basic)"
+    - "他ユーザ投稿"
+    - "ブックマーク同期"
+
+# --------------------------------------------------------------------
+architecture:
+  file_tree:
+    - package.json
+    - tsconfig.json
+    - rollup.config.js
+    - manifest.json
+    - src/
+      - main.ts        # Obsidian plugin entry (thin)
+      - core.ts        # pure functions: fetchUserId, fetchTweets, tweetToMarkdown
+      - settings.ts
+    - test/
+      - core.test.ts   # Vitest unit tests
+    - dist/            # build output (ignored by git)
+  deps_runtime:
+    - nunjucks@^3.2.4
+  deps_dev:
+    - rollup@^4
+    - @rollup/plugin-typescript@latest
+    - typescript@^5
+    - vitest@^1
+  data_flow:
+    1. main.onload -> loadSettings
+    2. sync():
+        2.1 ensure userId (cache or fetchUserId)
+        2.2 fetchTweets
+        2.3 iterate & write markdown (tweetToMarkdown)
+    3. settings.saveSettings -> saveData(JSON)
+
+# --------------------------------------------------------------------
+tasks:
+  - id: T01
+    name: "InitProject"
+    cmd:
+      - git clone https://github.com/obsidianmd/obsidian-sample-plugin.git x-posts-sync
+      - cd x-posts-sync
+      - del .git -Recurse -Force
+  - id: T02
+    name: "CleanSample"
+    files_to_delete:
+      - main.ts
+      - main.js
+      - esbuild.config.mjs
+      - styles.css
+      - version-bump.mjs
+      - versions.json
+  - id: T03
+    name: "InstallDeps"
+    cmd:
+      - npm install
+      - npm install nunjucks
+      - npm install -D rollup @rollup/plugin-typescript typescript vitest
+  - id: T04
+    name: "AddSourceFiles"
+    desc: "Create src/*.ts & test/*.ts exactly as per core/main/settings/test sections below"
+  - id: T05
+    name: "UpdateManifest"
+    edit: manifest.json
+    diff: |
+      "id": "x-posts-sync",
+      "name": "X Posts Sync",
+      "main": "dist/main.js"
+  - id: T06
+    name: "UpdatePackageScripts"
+    patch: |
+      "scripts": {
+        "build": "tsc -noEmit -skipLibCheck && rollup -c",
+        "dev":   "rollup -c -w",
+        "test":  "vitest"
+      }
+  - id: T07
+    name: "WriteTestsFirst"
+    file: test/core.test.ts
+    asserts:
+      - "tweetToMarkdown includes text and id"
+      - "fetchUserId returns id=12 for mocked jack"
+  - id: T08
+    name: "ImplementCore"
+    file: src/core.ts
+    functions:
+      - fetchUserId
+      - fetchTweets
+      - tweetToMarkdown
+  - id: T09
+    name: "ImplementMain"
+    file: src/main.ts
+    focus: "thin wrapper, requestUrl, settings tab"
+  - id: T10
+    name: "RunTests"
+    cmd: npm test
+  - id: T11
+    name: "Build"
+    cmd: npm run build
+  - id: T12
+    name: "InstallToVault"
+    cmd: |
+      Copy-Item -Recurse -Force dist\* "D:\Dropbox\obsidian\YourVault\.obsidian\plugins\x-posts-sync"
+  - id: T13
+    name: "ManualVerify"
+    checklist:
+      - "設定タブに3項目だけ表示"
+      - "リボン押下でステータスバーに ✅ 表示"
+      - "Vault に MD が生成される"
+
+# --------------------------------------------------------------------
+core_code: |
+  // -------- src/core.ts ----------
+  import type { RequestUrlParam } from "obsidian";
+  export interface Tweet {
+    id: string; text: string; created_at: string;
+    referenced_tweets?: { id:string; type:string }[];
+  }
+  export async function fetchUserId(
+    username:string,
+    requestUrl:(p:RequestUrlParam)=>Promise<any>
+  ): Promise<string> {
+    const url = "https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=" + encodeURIComponent(username);
+    const res = await requestUrl({url});
+    const id = res.json[0]?.id;
+    if(!id) throw new Error("user id not found");
+    return id;
+  }
+  export async function fetchTweets(
+    userId:string, bearer:string,
+    requestUrl:(p:RequestUrlParam)=>Promise<any>
+  ): Promise<Tweet[]> {
+    const url = `https://api.twitter.com/2/users/${userId}/tweets?max_results=100&exclude=replies&tweet.fields=created_at,referenced_tweets`;
+    const res = await requestUrl({url, headers:{Authorization:`Bearer ${bearer}`}});
+    return res.json.data ?? [];
+  }
+  export function tweetToMarkdown(t:Tweet):string{
+    const rt = t.referenced_tweets?.find(r=>r.type==="retweeted")?.id ?? "";
+    return [
+      "---",
+      `id: ${t.id}`,
+      `created_at: ${t.created_at}`,
+      rt ? `retweeted_id: ${rt}` : "",
+      "---",
+      t.text,
+      ""
+    ].join("\n");
+  }
+
+main_code: |
+  // -------- src/main.ts ----------
+  import { Plugin, App, requestUrl, PluginSettingTab, Setting, Notice } from "obsidian";
+  import { fetchUserId, fetchTweets, tweetToMarkdown } from "./core";
+  import type { XSyncSettings } from "./settings";
+  import { DEFAULT_SETTINGS } from "./settings";
+
+  export default class XPostsSync extends Plugin {
+    settings!: XSyncSettings;
+    status!: HTMLElement;
+
+    async onload(){
+      this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+      this.addSettingTab(new Tab(this.app,this));
+      this.addRibbonIcon("bookmark-star","Sync My Posts",()=>this.sync());
+      this.status = this.addStatusBarItem();
+      this.status.setText("XPostsSync ⏳ init");
+      setTimeout(()=>this.sync(), 2000);
+      this.registerInterval(window.setInterval(()=>this.sync(), this.settings.interval*60000));
+    }
+    async onunload(){ await this.sync(); this.status.setText("XPostsSync 🛑 off"); }
+
+    async sync(){
+      const {bearerToken, username} = this.settings;
+      if(!bearerToken||!username){ this.status.setText("XPostsSync ⚠ 未設定"); return; }
+      try{
+        if(!this.settings.cachedUserId){
+          this.settings.cachedUserId = await fetchUserId(username, requestUrl);
+          await this.saveData(this.settings);
+        }
+        const tweets = await fetchTweets(this.settings.cachedUserId, bearerToken, requestUrl);
+        let n=0;
+        const a = this.app.vault.adapter;
+        for(const t of tweets){
+          const dir = `${t.created_at.slice(0,10).replace(/-/g,"/")}/`;
+          const path = `${dir}${t.id}.md`;
+          if(await a.exists(path)) continue;
+          await a.mkdir(dir).catch(()=>{});
+          await a.write(path, tweetToMarkdown(t)); n++;
+        }
+        this.status.setText(`XPostsSync ✅ ${n}`);
+      }catch(e:any){ console.error(e); new Notice("XPostsSync error: "+e.message); this.status.setText("XPostsSync ❌ error"); }
+    }
+  }
+
+  class Tab extends PluginSettingTab{
+    plugin:XPostsSync;
+    constructor(app:App,plugin:XPostsSync){ super(app,plugin); this.plugin=plugin; }
+    display():void{
+      const c=this.containerEl; c.empty(); c.createEl("h3",{text:"X Posts Sync"});
+      new Setting(c).setName("Bearer Token")
+        .addText(t=>t.setValue(this.plugin.settings.bearerToken)
+          .onChange(async v=>{ this.plugin.settings.bearerToken=v.trim(); await this.plugin.saveData(this.plugin.settings);} ));
+      new Setting(c).setName("Username (@無し)")
+        .addText(t=>t.setValue(this.plugin.settings.username)
+          .onChange(async v=>{ this.plugin.settings.username=v.trim(); this.plugin.settings.cachedUserId=""; await this.plugin.saveData(this.plugin.settings);} ));
+      new Setting(c).setName("Interval (min)")
+        .addText(t=>t.setValue(String(this.plugin.settings.interval))
+          .onChange(async v=>{ this.plugin.settings.interval=parseInt(v)||60; await this.plugin.saveData(this.plugin.settings);} ));
+    }
+  }
+
+settings_code: |
+  // -------- src/settings.ts ----------
+  export interface XSyncSettings{
+    bearerToken:string;
+    username:string;
+    cachedUserId:string;
+    interval:number;
+  }
+  export const DEFAULT_SETTINGS:XSyncSettings={
+    bearerToken:"",
+    username:"",
+    cachedUserId:"",
+    interval:60
+  };
+
+test_code: |
+  // -------- test/core.test.ts ----------
+  import { describe,it,expect,vi } from "vitest";
+  import { fetchUserId, tweetToMarkdown } from "../src/core";
+
+  describe("tweetToMarkdown",()=>{
+    it("includes text & id",()=>{
+      const md = tweetToMarkdown({id:"1",text:"hello",created_at:"2025-06-05T00:00:00Z"});
+      expect(md).toContain("hello");
+      expect(md).toContain("id: 1");
+    });
+  });
+
+  describe("fetchUserId",()=>{
+    it("parses id",async()=>{
+      vi.stubGlobal("fetch",(url:string)=>Promise.resolve({ok:true,json:async()=>[{id:"12"}]}) as any);
+      const id = await fetchUserId("jack",(p)=>fetch(p.url));
+      expect(id).toBe("12");
+      (fetch as any).mockRestore?.();
+    });
+  });
+
+# --------------------------------------------------------------------
+how_to_run:
+  step1_clone_and_clean: |
+    git clone https://github.com/obsidianmd/obsidian-sample-plugin.git x-posts-sync
+    cd x-posts-sync
+    del main.ts, main.js, esbuild.config.mjs, styles.css, version-bump.mjs, versions.json
+  step2_install: |
+    npm install
+    npm install nunjucks
+    npm install -D rollup @rollup/plugin-typescript typescript vitest
+  step3_write_files: "src/ と test/ を本 YAML の *_code セクションで置換"
+  step4_build: |
+    npm run build
+  step5_deploy: |
+    Copy-Item -Recurse -Force dist\* "D:\Dropbox\obsidian\YourVault\.obsidian\plugins\x-posts-sync"
+  step6_enable_plugin: "Obsidian → Settings → Community plugins → Reload & Enable"
