@@ -1,0 +1,10 @@
+{
+  "id": "x-post-sync",
+  "name": "X Post Sync",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Sync X Posts to your Obsidian.",
+  "author": "Unknown",
+  "authorUrl": "https://example.com",
+  "main": "dist/main.js"
+}
