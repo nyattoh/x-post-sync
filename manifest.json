@@ -1,0 +1,9 @@
+{
+	"id": "x-posts-sync",
+	"name": "X Posts Sync",
+	"version": "0.2.0",
+	"minAppVersion": "1.8.0",
+	"description": "Sync your own X (Twitter) posts & retweets into an Obsidian vault.",
+	"author": "ビスさん",
+	"main": "dist/main.js"
+}
