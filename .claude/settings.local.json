@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test)",
+      "Bash(npm install:*)",
+      "Bash(npx vitest run:*)",
+      "Bash(npm run build:*)",
+      "Bash(ls:*)",
+      "Bash(tmux source-file:*)",
+      "Bash(dos2unix:*)",
+      "Bash(sed:*)",
+      "Bash(sudo apt:*)",
+      "Bash(sudo apt install:*)",
+      "Bash(git checkout:*)",
+      "Bash(git worktree:*)",
+      "Bash(git -C /mnt/d/Documents/ai/x2obsidian/x-posts-sync-worker-a status)",
+      "Bash(git -C /mnt/d/Documents/ai/x2obsidian/x-posts-sync-worker-c status)",
+      "Bash(git fetch:*)",
+      "Bash(git stash:*)",
+      "WebFetch(domain:docs.obsidian.md)",
+      "WebFetch(domain:docs.obsidian.md)",
+      "Bash(npm --prefix /mnt/d/Documents/ai/x2obsidian/x-posts-sync-worker-b test)",
+      "Bash(npm --prefix /mnt/d/Documents/ai/x2obsidian/x-posts-sync-worker-b run build)",
+      "WebFetch(domain:developer.x.com)",
+      "Bash(cp:*)",
+      "Bash(git add:*)",
+      "Bash(git pull:*)"
+    ],
+    "deny": []
+  }
+}
