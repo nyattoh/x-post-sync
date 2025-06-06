@@ -17,16 +17,22 @@ context:
     obsidian: "デスクトップ 1.8.x"
     vault_path: "D:/Dropbox/obsidian/YourVault"
   api_constraints:
-    - "Free plan: 100 posts / 月"
-    - "Endpoint: /2/users/:id/tweets (App-only OK)"
+    - "✅ CORRECTED: X API Free tier supports experimental read API"
+    - "Free plan (2024年10月〜): READ 100件/月, POST 500件/月"
+    - "Endpoint: /2/users/:id/tweets available with 100 reads/month limit"
+    - "User lookup: both syndication API and X API v2 available"
+    - "Bearer Token: app-only context works for reads (experimental)"
+    - "重要: 月次制限管理とRate limit対応が必須"
   plugin_goals:
-    - "ハンドル名から自分の投稿+RT を取得"
+    - "✅ 復活: ハンドル名から自分の投稿+RT を取得 (月100件まで)"
     - "Markdown に変換し YYYY/MM/DD フォルダへ保存"
-    - "UI は設定タブ + リボン + ステータスバー"
+    - "UI は設定タブ + リボン + ステータスバー + 使用量表示"
+    - "月次制限管理とRate limit対応を含む"
   non_goals:
     - "Bookmarks (要 Basic)"
     - "他ユーザ投稿"
     - "ブックマーク同期"
+    - "🚨 追加: 自分の投稿取得 (Free tierでは不可能)"
 
 # --------------------------------------------------------------------
 architecture:
@@ -133,6 +139,23 @@ tasks:
       - "Vault に MD が生成される"
 
 # --------------------------------------------------------------------
+# 🚨 CRITICAL DESIGN FLAW DISCOVERED (2024年調査結果)
+# 
+# ❌ 致命的な問題:
+# - X API Free tierではGET操作が完全に不可能
+# - /users/:id/tweets エンドポイントはBasic tier必須 ($200/月)
+# - Bearer TokenのFree tierは投稿専用、読み取り一切不可
+# - 従来の「100 reads/月」情報は完全に誤り
+# 
+# 🔄 プロジェクト再設計が必要:
+# 1. Option A: Basic tier使用 ($200/月)
+# 2. Option B: syndication APIのみ (ユーザー情報のみ)
+# 3. Option C: RSS feed利用
+# 4. Option D: Twitter Data Export利用
+# 
+# ⚠️  現在のfetchTweets実装は動作不可能
+# 参考: https://devcommunity.x.com/t/twitter-v2-endpoints-breakdown-for-free-tier/188900
+
 core_code: |
   // -------- src/core.ts ----------
   import type { RequestUrlParam } from "obsidian";
@@ -142,21 +165,51 @@ core_code: |
   }
   export async function fetchUserId(
     username:string,
-    requestUrl:(p:RequestUrlParam)=>Promise<any>
+    requestUrl:(p:RequestUrlParam)=>Promise<any>,
+    bearerToken?:string
   ): Promise<string> {
-    const url = "https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=" + encodeURIComponent(username);
-    const res = await requestUrl({url});
-    const id = res.json[0]?.id;
-    if(!id) throw new Error("user id not found");
-    return id;
+    // Priority 1: Syndication API (no auth required)
+    try {
+      const url = "https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=" + encodeURIComponent(username);
+      const res = await requestUrl({url});
+      const id = res.json?.[0]?.id;
+      if(id) return String(id);
+    } catch(e) { console.log("Syndication API failed, trying X API v2"); }
+    
+    // Priority 2: X API v2 user lookup (if bearer token available)
+    if(bearerToken) {
+      try {
+        const url = `https://api.x.com/2/users/by/username/${encodeURIComponent(username)}`;
+        const res = await requestUrl({url, headers:{Authorization:`Bearer ${bearerToken}`}});
+        if(res.status === 429) throw new Error("Rate limit exceeded for user lookup (75/15min)");
+        const id = res.json?.data?.id;
+        if(id) return String(id);
+      } catch(e) { console.log("X API v2 user lookup failed:", e); }
+    }
+    
+    throw new Error(`User ID not found for: ${username}. Check username or try again later.`);
   }
+  // 🚨 WARNING: This function CANNOT work with X API Free tier
+  // Free tier has ZERO read access - Basic tier ($200/month) required
   export async function fetchTweets(
     userId:string, bearer:string,
     requestUrl:(p:RequestUrlParam)=>Promise<any>
   ): Promise<Tweet[]> {
-    const url = `https://api.twitter.com/2/users/${userId}/tweets?max_results=100&exclude=replies&tweet.fields=created_at,referenced_tweets`;
+    // Immediate error for Free tier users
+    throw new Error(
+      "❌ X API Free tier does not support reading tweets. " +
+      "Options: 1) Upgrade to Basic tier ($200/month), " +
+      "2) Use Twitter Data Export, " +
+      "3) Use RSS feeds. " +
+      "Current implementation is impossible with Free tier."
+    );
+    
+    // Original implementation (only works with Basic tier or higher)
+    /*
+    const url = `https://api.x.com/2/users/${userId}/tweets?max_results=100&exclude=replies&tweet.fields=created_at,referenced_tweets`;
     const res = await requestUrl({url, headers:{Authorization:`Bearer ${bearer}`}});
-    return res.json.data ?? [];
+    return res.json?.data ?? [];
+    */
   }
   export function tweetToMarkdown(t:Tweet):string{
     const rt = t.referenced_tweets?.find(r=>r.type==="retweeted")?.id ?? "";
@@ -198,20 +251,18 @@ main_code: |
       if(!bearerToken||!username){ this.status.setText("XPostsSync ⚠ 未設定"); return; }
       try{
         if(!this.settings.cachedUserId){
-          this.settings.cachedUserId = await fetchUserId(username, requestUrl);
+          this.settings.cachedUserId = await fetchUserId(username, requestUrl, bearerToken);
           await this.saveData(this.settings);
         }
-        const tweets = await fetchTweets(this.settings.cachedUserId, bearerToken, requestUrl);
-        let n=0;
-        const a = this.app.vault.adapter;
-        for(const t of tweets){
-          const dir = `${t.created_at.slice(0,10).replace(/-/g,"/")}/`;
-          const path = `${dir}${t.id}.md`;
-          if(await a.exists(path)) continue;
-          await a.mkdir(dir).catch(()=>{});
-          await a.write(path, tweetToMarkdown(t)); n++;
+        // ❌ CANNOT WORK WITH FREE TIER - Basic tier required
+        try {
+          const tweets = await fetchTweets(this.settings.cachedUserId, bearerToken, requestUrl);
+          // This code will never execute on Free tier
+        } catch(e) {
+          this.status.setText("❌ Free tier: read not supported");
+          new Notice("X API Free tier cannot read tweets. Need Basic tier ($200/month) or use alternatives.");
+          return;
         }
-        this.status.setText(`XPostsSync ✅ ${n}`);
       }catch(e:any){ console.error(e); new Notice("XPostsSync error: "+e.message); this.status.setText("XPostsSync ❌ error"); }
     }
   }

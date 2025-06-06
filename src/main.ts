@@ -1,7 +1,7 @@
 import { Plugin, App, requestUrl, PluginSettingTab, Setting, Notice } from "obsidian";
 import { fetchUserId, fetchTweets, tweetToMarkdown } from "./core";
 import type { XSyncSettings } from "./settings";
-import { DEFAULT_SETTINGS } from "./settings";
+import { DEFAULT_SETTINGS, checkMonthlyReset } from "./settings";
 
 export default class XPostsSync extends Plugin {
   settings!: XSyncSettings;
@@ -28,12 +28,32 @@ export default class XPostsSync extends Plugin {
       this.status.setText("XPostsSync ⚠ 未設定");
       return;
     }
+
+    // Check and handle monthly reset
+    const wasReset = checkMonthlyReset(this.settings);
+    if (wasReset) {
+      await this.saveData(this.settings);
+    }
+
+    // Check monthly limit before making request
+    if (this.settings.monthlyRequestCount >= 100) {
+      this.status.setText("❌ 月次制限到達");
+      new Notice("X API月次制限(100 reads)に到達しました。翌月まで待機してください。");
+      return;
+    }
+
     try {
       if (!this.settings.cachedUserId) {
         this.settings.cachedUserId = await fetchUserId(username, requestUrl, bearerToken);
         await this.saveData(this.settings);
       }
+      
       const tweets = await fetchTweets(this.settings.cachedUserId, bearerToken, requestUrl);
+      
+      // Increment usage counter on successful API call
+      this.settings.monthlyRequestCount++;
+      await this.saveData(this.settings);
+      
       let n = 0;
       const a = this.app.vault.adapter;
       for (const t of tweets) {
@@ -44,11 +64,17 @@ export default class XPostsSync extends Plugin {
         await a.write(path, tweetToMarkdown(t));
         n++;
       }
-      this.status.setText(`XPostsSync ✅ ${n}`);
+      this.status.setText(`XPostsSync ✅ ${n} (${this.settings.monthlyRequestCount}/100)`);
     } catch (e: any) {
       console.error(e);
-      new Notice("XPostsSync error: " + e.message);
-      this.status.setText("XPostsSync ❌ error");
+      
+      if (e.message && e.message.includes("Rate limit exceeded")) {
+        this.status.setText("⏰ Rate limit");
+        new Notice("Rate limit到達。15分後に再試行してください。");
+      } else {
+        new Notice("XPostsSync error: " + e.message);
+        this.status.setText("XPostsSync ❌ error");
+      }
     }
   }
 }
@@ -63,6 +89,15 @@ class Tab extends PluginSettingTab {
     const c = this.containerEl;
     c.empty();
     c.createEl("h3", { text: "X Posts Sync" });
+    
+    new Setting(c)
+      .setName("📊 X API使用状況")
+      .setDesc(`今月の使用量: ${this.plugin.settings.monthlyRequestCount}/100 reads`);
+    
+    new Setting(c)
+      .setName("⚠️ Free Tier制限")
+      .setDesc("月100リクエストまで。超過時は翌月まで待機が必要です。");
+    
     new Setting(c)
       .setName("Bearer Token")
       .addText(t => t

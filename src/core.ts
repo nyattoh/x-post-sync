@@ -10,45 +10,40 @@ export interface Tweet {
 export async function fetchUserId(
   username: string,
   requestUrl: (p: RequestUrlParam) => Promise<any>,
-  bearer?: string
+  bearerToken?: string
 ): Promise<string> {
-  // Try Twitter API v2 users/by/username endpoint first if bearer token available
-  if (bearer) {
-    const apiUrl = `https://api.twitter.com/2/users/by/username/${encodeURIComponent(username)}`;
+  // Try X API v2 first if bearer token is available
+  if (bearerToken) {
+    const apiUrl = `https://api.x.com/2/users/by/username/${encodeURIComponent(username)}`;
     
     try {
-      console.log("Attempting Twitter API v2 for user:", username);
-      const res = await requestUrl({ 
+      const res = await requestUrl({
         url: apiUrl,
-        headers: { 
-          Authorization: `Bearer ${bearer}` 
-        }
+        headers: { Authorization: `Bearer ${bearerToken}` }
       });
       
-      console.log("Twitter API v2 response:", res);
-      
       let jsonData;
-      try {
+      if (res.json) {
         jsonData = res.json;
-      } catch (jsonError) {
-        if (res.text && res.text.trim()) {
+      } else if (res.text) {
+        try {
           jsonData = JSON.parse(res.text);
-        } else {
-          throw new Error("Empty response from Twitter API");
+        } catch (parseError) {
+          throw new Error(`Invalid JSON response from X API: ${res.text}`);
         }
+      } else {
+        throw new Error("Empty response from X API");
       }
       
       if (jsonData?.data?.id) {
-        console.log("Found user ID via API v2:", jsonData.data.id);
         return String(jsonData.data.id);
       }
       
       if (jsonData?.errors) {
-        console.log("API v2 errors:", jsonData.errors);
+        console.log("X API v2 errors, falling back to syndication:", jsonData.errors);
       }
-      
     } catch (apiError: any) {
-      console.log("Twitter API v2 failed, trying syndication endpoint:", apiError.message);
+      console.log("X API v2 failed, trying syndication endpoint:", apiError.message);
     }
   }
   
@@ -56,38 +51,36 @@ export async function fetchUserId(
   const syndicationUrl = "https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=" + encodeURIComponent(username);
   
   try {
-    console.log("Trying syndication API for user:", username);
     const res = await requestUrl({ url: syndicationUrl });
-    console.log("Syndication API response:", res);
     
+    // Handle different response formats
     let jsonData;
-    try {
+    if (res.json) {
       jsonData = res.json;
-    } catch (jsonError) {
-      if (res.text && res.text.trim()) {
-        jsonData = JSON.parse(res.text);
-      } else {
+    } else if (res.text) {
+      if (!res.text.trim()) {
         throw new Error("Empty response from syndication API");
       }
+      try {
+        jsonData = JSON.parse(res.text);
+      } catch (parseError) {
+        throw new Error(`Invalid JSON response from syndication API: ${res.text}`);
+      }
+    } else {
+      throw new Error("Empty response from syndication API");
     }
     
-    if (!jsonData) {
-      throw new Error("No JSON data in syndication response");
-    }
-    
+    // Ensure jsonData is an array
     const data = Array.isArray(jsonData) ? jsonData : [jsonData];
     const id = data[0]?.id;
     
     if (!id) {
-      throw new Error(`User ID not found for username: ${username}. Please ensure the username is correct and the account is public.`);
+      throw new Error(`User ID not found for username: ${username}`);
     }
     
-    console.log("Found user ID via syndication:", id);
     return String(id);
-    
-  } catch (syndicationError: any) {
-    console.error("Syndication API failed:", syndicationError);
-    throw new Error(`Failed to fetch user ID for ${username}. Please check the username and try again.`);
+  } catch (error: any) {
+    throw new Error(`Failed to fetch user ID: ${error.message}`);
   }
 }
 
@@ -96,42 +89,53 @@ export async function fetchTweets(
   bearer: string,
   requestUrl: (p: RequestUrlParam) => Promise<any>
 ): Promise<Tweet[]> {
-  const url = `https://api.twitter.com/2/users/${userId}/tweets?max_results=100&exclude=replies&tweet.fields=created_at,referenced_tweets`;
+  const url = `https://api.x.com/2/users/${userId}/tweets?max_results=100&exclude=replies&tweet.fields=created_at,referenced_tweets`;
+  
   try {
     const res = await requestUrl({
       url,
       headers: { Authorization: `Bearer ${bearer}` }
     });
     
-    console.log("fetchTweets raw response:", res);
-    console.log("fetchTweets response status:", res.status);
-    console.log("fetchTweets response text:", res.text);
+    // Handle rate limit 429 error specifically
+    if (res.status === 429) {
+      const resetTime = res.headers?.['x-rate-limit-reset'];
+      const resetTimeStr = resetTime ? new Date(parseInt(resetTime) * 1000).toLocaleString() : 'unknown';
+      throw new Error(`Rate limit exceeded. Free tier: 100 reads/month. Reset: ${resetTimeStr}`);
+    }
     
+    // Handle different response formats
     let jsonData;
-    try {
+    if (res.json) {
       jsonData = res.json;
-    } catch (jsonError) {
-      if (res.text && res.text.trim()) {
+    } else if (res.text) {
+      try {
         jsonData = JSON.parse(res.text);
-      } else {
-        throw new Error("Empty response from tweets API");
+      } catch (parseError) {
+        throw new Error(`Invalid JSON response from X API: ${res.text}`);
       }
+    } else {
+      throw new Error("Empty response from X API");
     }
     
-    console.log("fetchTweets parsed json:", jsonData);
-    
-    if (!jsonData) {
-      throw new Error("No JSON data in tweets response");
-    }
-    
+    // Check for API errors
     if (jsonData.errors) {
-      const errorMsg = jsonData.errors.map((e: any) => e.message).join(", ");
-      throw new Error(`API Error: ${errorMsg}`);
+      const errorMsg = jsonData.errors.map((e: any) => e.message || e.detail).join(", ");
+      throw new Error(`X API Error: ${errorMsg}`);
     }
     
     return jsonData.data ?? [];
   } catch (error: any) {
-    console.error("fetchTweets error:", error);
+    // Check if this is a rate limit error from Obsidian's requestUrl
+    if (error.message && error.message.includes("status 429")) {
+      throw new Error("Rate limit exceeded. Free tier: 100 reads/month. Please wait before trying again.");
+    }
+    
+    // Check if the error has a status property indicating 429
+    if (error.status === 429) {
+      throw new Error("Rate limit exceeded. Free tier: 100 reads/month. Wait 15 minutes or check monthly usage.");
+    }
+    
     throw new Error(`Failed to fetch tweets: ${error.message}`);
   }
 }
