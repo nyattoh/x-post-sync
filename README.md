@@ -1,94 +1,99 @@
-# Obsidian Sample Plugin
+# X Posts Sync for Obsidian
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+X（旧Twitter）の自分の投稿とリツイートをObsidianのVaultに同期するプラグインです。
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## 機能
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+- 🐦 X（Twitter）の自分の投稿とリツイートを自動取得
+- 📁 YYYY/MM/DD形式のフォルダ構造で整理
+- 📊 月次使用量の追跡と表示（Free tier: 100 reads/月）
+- ⏰ Rate limit対応と適切なエラーハンドリング
+- 🔄 自動同期（設定可能な間隔）
+- 🎯 リボンアイコンから手動同期も可能
 
-## First time developing plugins??
+## 必要条件
 
-Quick starting guide for new plugin devs:
+- Obsidian デスクトップ版 1.8.x以上
+- X Developer Account（無料）
+- Bearer Token（App-only認証用）
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+## インストール
 
-## Releasing new releases
+### Obsidianから直接インストール（準備中）
+1. Obsidianの設定 → コミュニティプラグイン
+2. 「X Posts Sync」を検索
+3. インストール → 有効化
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### 手動インストール
+1. リリースページから`main.js`、`manifest.json`をダウンロード
+2. Vaultの`.obsidian/plugins/x-posts-sync/`フォルダに配置
+3. Obsidianを再起動し、設定でプラグインを有効化
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+## 設定
 
-## Adding your plugin to the community plugin list
+1. **Bearer Token**: X Developer Portalから取得
+   - [X Developer Portal](https://developer.x.com/)でアプリを作成
+   - Keys and Tokensセクションから Bearer Token を取得
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+2. **Username**: @を除いたユーザー名（例: `elonmusk`）
 
-## How to use
+3. **Interval**: 自動同期の間隔（分単位、デフォルト: 60分）
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+## 使用方法
 
-## Manually installing the plugin
+1. 設定でBearer TokenとUsernameを入力
+2. リボンアイコンをクリックするか、自動同期を待つ
+3. ステータスバーで同期状況を確認
+   - `✅ 5 (23/100)`: 5件同期成功、今月23件使用済み
+   - `⏰ Rate limit`: 15分待機が必要
+   - `❌ 月次制限到達`: 翌月まで待機
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+## X API制限について
 
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint .\src\`
+### Free Tier制限
+- **読み取り**: 100リクエスト/月
+- **投稿**: 500件/月（このプラグインでは使用しません）
+- **Rate limit**: 15分間での制限あり
 
-## Funding URL
+### 制限への対応
+- 月次使用量の自動追跡
+- 月が変わると自動的にリセット
+- Rate limit時は適切な待機時間を表示
 
-You can include funding URLs where people who use your plugin can financially support it.
+## トラブルシューティング
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+### "Rate limit exceeded" エラー
+- 15分待ってから再試行してください
+- または月次制限（100 reads）に到達している可能性があります
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
-```
+### "User ID not found" エラー
+- ユーザー名が正しいか確認してください
+- @マークは不要です
 
-If you have multiple URLs, you can also do:
+### "Invalid authentication credentials" エラー
+- Bearer Tokenが正しいか確認してください
+- X Developer Portalで新しいトークンを生成してみてください
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
+## 技術仕様
 
-## API Documentation
+- X API v2（OAuth 2.0 Application-Only認証）
+- Fallback: Syndication API（ユーザーID取得用）
+- TypeScript実装
+- Vitest使用のテストスイート
 
-See https://github.com/obsidianmd/obsidian-api
+## ライセンス
+
+MIT License
+
+## 貢献
+
+プルリクエストは歓迎します。大きな変更の場合は、まずIssueを作成して変更内容を議論してください。
+
+## 作者
+
+- [nyattoh](https://github.com/nyattoh)
+
+## 謝辞
+
+- Obsidian開発チーム
+- X API提供元
