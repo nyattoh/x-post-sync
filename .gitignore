@@ -10,7 +10,8 @@ node_modules
 
 # Don't include the compiled main.js file in the repo.
 # They should be uploaded to GitHub releases instead.
-main.js
+# main.js (commented out for development)
+# Note: dist/main.js is included for testing purposes
 
 # Exclude sourcemaps
 *.map
